@@ -8,11 +8,6 @@
 <a href="https://space.bilibili.com/3546697445673471">
 <img src="./docs/images/badge_btv.png" alt="bilibili_purpaca" height=22 />
 </a>
-
-<br/>
-
-| **简体中文** | [**English**](./docs/en/README.md) |
-
 </div>
 
 ### 概述
