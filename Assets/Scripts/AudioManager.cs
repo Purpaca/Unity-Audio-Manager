@@ -39,8 +39,10 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     private static MaxDistanceIndexer m_maxDistanceIndexer = new();
 
     private static PositionIndexer m_positionIndexer = new();
-    private static IsPlayingIndexer m_isPlayingIndexer = new();
 
+    private static IsPlayingIndexer m_isPlayingIndexer = new();
+    private static LengthIndexer m_lengthIndexer = new();
+    //private static TimeIndexer m_timeIndexer = new();
     #region 对外公开
     public static BypassEffectsIndexer BypassEffects { get => m_bypassEffectsIndexer; }
     public static BypassListenerEffectsIndexer BypassListenerEffects { get => m_bypassListenerEffectsIndexer; }
@@ -59,7 +61,10 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     public static MaxDistanceIndexer MaxDistance { get => m_maxDistanceIndexer; }
 
     public static PositionIndexer Position { get => m_positionIndexer; }
+
     public static IsPlayingIndexer IsPlaying { get => m_isPlayingIndexer; }
+    public static LengthIndexer Length { get => m_lengthIndexer; }
+    //public static TimeIndexer Time { get => m_timeIndexer; }
     #endregion
 
     #endregion
@@ -134,13 +139,15 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// 创建一个音频播放句柄，并立即开始播放
     /// </summary>
     /// <param name="audioClip">要用于播放的AudioClip</param>
+    /// <param name="loops">在播放一次的基础上额外循环播放的次数。如果此值为负，则永久循环播放</param>
     /// <param name="volume">此音频播放句柄的播放音量</param>
+    /// <param name="channel">此音频播放句柄的音频输出频道</param>
     /// <param name="callback">当此音频播放句柄播放完毕后的回调方法</param>
     /// <returns>音频播放句柄的唯一标识码，可用于之后对音频播放句柄进行访问和操作</returns>
-    public static string Play(AudioClip audioClip, float volume = 1.0f, UnityAction callback = null)
+    public static string Play(AudioClip audioClip, int loops = 0, float volume = 1.0f, OutputChannel channel = OutputChannel.Master, UnityAction callback = null)
     {
-        AudioSequence sequence = AudioSequence.CreateAudioSequence(new AudioSequence.Clip(audioClip, 0));
-        return Play(sequence, volume, callback);
+        AudioSequence sequence = AudioSequence.CreateAudioSequence(new AudioSequence.Clip(audioClip, loops));
+        return Play(sequence, volume, channel, callback);
     }
 
     /// <summary>
@@ -148,9 +155,10 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// </summary>
     /// <param name="sequence">要用于播放的音频序列</param>
     /// <param name="volume">此音频播放句柄的播放音量</param>
+    /// <param name="channel">此音频播放句柄的音频输出频道</param>
     /// <param name="callback">当此音频播放句柄播放完毕后的回调方法</param>
     /// <returns>音频播放句柄的唯一标识码，可用于之后对音频播放句柄进行访问和操作</returns>
-    public static string Play(AudioSequence sequence, float volume = 1.0f, UnityAction callback = null)
+    public static string Play(AudioSequence sequence, float volume = 1.0f, OutputChannel channel = OutputChannel.Master, UnityAction callback = null)
     {
         string identity = Guid.NewGuid().ToString();
 
@@ -162,6 +170,8 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
 
         Handle handle = instance.GetFreeHandle(sequence, source, volume);
         handle.AddOnFinishedListener(callback);
+
+        SetOutputChanel(ref source, channel);
 
         instance.m_managedHandles.Add(identity, handle);
         handle.Play();
@@ -175,10 +185,10 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// <param name="audioClip">要用于播放的AudioClip</param>
     /// <param name="volume">播放音量</param>
     /// <param name="callback">当播放完毕后的回调方法</param>
-    public static void PlayOneShot(AudioClip audioClip, float volume = 1.0f, UnityAction callback = null)
+    public static void PlayOneShot(AudioClip audioClip, float volume = 1.0f, OutputChannel channel = OutputChannel.Master, UnityAction callback = null)
     {
         AudioSequence sequence = AudioSequence.CreateAudioSequence(new AudioSequence.Clip(audioClip, 0));
-        PlayOneShot(sequence, volume, callback);
+        PlayOneShot(sequence, volume, channel, callback);
     }
 
     /// <summary>
@@ -187,7 +197,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// <param name="sequence">要用于播放的音频序列</param>
     /// <param name="volume">播放音量</param>
     /// <param name="callback">当播放完毕后的回调方法</param>
-    public static void PlayOneShot(AudioSequence sequence, float volume = 1.0f, UnityAction callback = null)
+    public static void PlayOneShot(AudioSequence sequence, float volume = 1.0f, OutputChannel channel = OutputChannel.Master, UnityAction callback = null)
     {
         AudioSource source;
         if (!instance.TryGetAudioSource(out source))
@@ -203,6 +213,8 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             instance.m_oneShotHandles.Remove(handle);
         });
 
+        SetOutputChanel(ref source, channel);
+
         instance.m_oneShotHandles.Add(handle);
         handle.Play();
     }
@@ -212,16 +224,13 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// </summary>
     public static void Replay(string guid)
     {
-        if (string.IsNullOrEmpty(guid))
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
         {
-            Debug.LogError("The given guid string is null or empty!");
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
             return;
         }
 
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            instance.m_managedHandles[guid].Play();
-        }
+        instance.m_managedHandles[guid].Play();
     }
 
     /// <summary>
@@ -229,16 +238,13 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// </summary>
     public static void Stop(string guid)
     {
-        if (string.IsNullOrEmpty(guid))
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
         {
-            Debug.LogError("The given guid string is null or empty!");
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
             return;
         }
 
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            instance.m_managedHandles[guid].Stop();
-        }
+        instance.m_managedHandles[guid].Stop();
     }
 
     /// <summary>
@@ -246,16 +252,13 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// </summary>
     public static void Pause(string guid)
     {
-        if (string.IsNullOrEmpty(guid))
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
         {
-            Debug.LogError("The given guid string is null or empty!");
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
             return;
         }
 
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            instance.m_managedHandles[guid].Pause();
-        }
+        instance.m_managedHandles[guid].Pause();
     }
 
     /// <summary>
@@ -263,118 +266,13 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// </summary>
     public static void UnPause(string guid)
     {
-        if (string.IsNullOrEmpty(guid))
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
         {
-            Debug.LogError("The given guid string is null or empty!");
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
             return;
         }
 
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            instance.m_managedHandles[guid].Resume();
-        }
-    }
-
-    /// <summary>
-    /// 为唯一标识码对应音频播放句柄移除在播放完毕后的回调方法
-    /// </summary>
-    public static void RemoveOnPlayFinishedCallback(string guid, UnityAction callback)
-    {
-        if (string.IsNullOrEmpty(guid))
-        {
-            Debug.LogError("The given guid string is null or empty!");
-            return;
-        }
-
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            instance.m_managedHandles[guid].RemoveOnFinishedListener(callback);
-        }
-    }
-
-    /// <summary>
-    /// 清除唯一标识码对应音频播放句柄所有播放完毕后的回调方法
-    /// </summary>
-    public static void ClearOnPlayFinishedCallback(string guid)
-    {
-        if (string.IsNullOrEmpty(guid))
-        {
-            Debug.LogError("The given guid string is null or empty!");
-            return;
-        }
-
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            instance.m_managedHandles[guid].ClearOnFinishedListener();
-        }
-    }
-
-    /// <summary>
-    /// 设置唯一标识码对应音频播放句柄的输出频道至"Music"
-    /// </summary>
-    /// <param name="guid"></param>
-    public static void SetOutputChanelToMusic(string guid)
-    {
-        if (string.IsNullOrEmpty(guid))
-        {
-            Debug.LogError("The given guid string is null or empty!");
-            return;
-        }
-
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            instance.m_managedHandles[guid].OutputAudioMixerGroup = instance._musicGroup;
-        }
-    }
-
-    /// <summary>
-    /// 设置唯一标识码对应音频播放句柄的输出频道至"Sound"
-    /// </summary>
-    /// <param name="guid"></param>
-    public static void SetOutputChanelToSound(string guid)
-    {
-        if (string.IsNullOrEmpty(guid))
-        {
-            Debug.LogError("The given guid string is null or empty!");
-            return;
-        }
-
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            instance.m_managedHandles[guid].OutputAudioMixerGroup = instance._soundGroup;
-        }
-    }
-
-    /// <summary>
-    /// 将给定的音频输出源的目标输出频道设置为音乐组
-    /// </summary>
-    public static void OutputToMusicChanel(ref AudioSource audioSource)
-    {
-        audioSource.outputAudioMixerGroup = instance._musicGroup;
-    }
-
-    /// <summary>
-    /// 将给定的音频输出源的目标输出频道设置为音乐组
-    /// </summary>
-    public static void OutputToMusicChanel(ref AudioMixer mixer)
-    {
-        mixer.outputAudioMixerGroup = instance._musicGroup;
-    }
-
-    /// <summary>
-    /// 将给定的音频输出源的目标输出频道设置为音效组
-    /// </summary>
-    public static void OutputToSoundChanel(ref AudioSource audioSource)
-    {
-        audioSource.outputAudioMixerGroup = instance._soundGroup;
-    }
-
-    /// <summary>
-    /// 将给定的音频输出源的目标输出频道设置为音效组
-    /// </summary>
-    public static void OutputToSoundChanel(ref AudioMixer mixer)
-    {
-        mixer.outputAudioMixerGroup = instance._soundGroup;
+        instance.m_managedHandles[guid].Resume();
     }
 
     /// <summary>
@@ -382,16 +280,117 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// </summary>
     public static void AddOnPlayFinishedCallback(string guid, UnityAction callback)
     {
-        if (string.IsNullOrEmpty(guid))
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
         {
-            Debug.LogError("The given guid string is null or empty!");
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
             return;
         }
 
-        if (instance.m_managedHandles.ContainsKey(guid))
+        instance.m_managedHandles[guid].AddOnFinishedListener(callback);
+    }
+
+    /// <summary>
+    /// 为唯一标识码对应音频播放句柄移除在播放完毕后的回调方法
+    /// </summary>
+    public static void RemoveOnPlayFinishedCallback(string guid, UnityAction callback)
+    {
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
         {
-            instance.m_managedHandles[guid].AddOnFinishedListener(callback);
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
+            return;
         }
+
+        instance.m_managedHandles[guid].RemoveOnFinishedListener(callback);
+    }
+
+    /// <summary>
+    /// 清除唯一标识码对应音频播放句柄所有播放完毕后的回调方法
+    /// </summary>
+    public static void ClearOnPlayFinishedCallback(string guid)
+    {
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
+        {
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
+            return;
+        }
+
+        instance.m_managedHandles[guid].ClearOnFinishedListener();
+    }
+
+    /// <summary>
+    /// 设置唯一标识码对应音频播放句柄的音频输出频道
+    /// </summary>
+    public static void SetOutputChanel(string guid, OutputChannel chanel)
+    {
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
+        {
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
+            return;
+        }
+
+        AudioMixerGroup mixerGroup;
+        switch (chanel)
+        {
+            case OutputChannel.Music:
+                mixerGroup = instance._musicGroup;
+                break;
+            case OutputChannel.Sound:
+                mixerGroup = instance._soundGroup;
+                break;
+            case OutputChannel.Master:
+            default:
+                mixerGroup = instance._masterGroup;
+                break;
+        }
+        instance.m_managedHandles[guid].OutputAudioMixerGroup = mixerGroup;
+    }
+
+    /// <summary>
+    /// 设置给定的AudioSource的音频输出频道
+    /// </summary>
+    public static void SetOutputChanel(ref AudioSource audioSource, OutputChannel chanel)
+    {
+        AudioMixerGroup mixerGroup;
+
+        switch (chanel)
+        {
+            case OutputChannel.Music:
+                mixerGroup = instance._musicGroup;
+                break;
+            case OutputChannel.Sound:
+                mixerGroup = instance._soundGroup;
+                break;
+            case OutputChannel.Master:
+            default:
+                mixerGroup = instance._masterGroup;
+                break;
+        }
+
+        audioSource.outputAudioMixerGroup = mixerGroup;
+    }
+
+    /// <summary>
+    /// 设置给定的AudioMixer的音频输出频道
+    /// </summary>
+    public static void SetOutputChanel(ref AudioMixer audioMixer, OutputChannel chanel)
+    {
+        AudioMixerGroup mixerGroup;
+
+        switch (chanel)
+        {
+            case OutputChannel.Music:
+                mixerGroup = instance._musicGroup;
+                break;
+            case OutputChannel.Sound:
+                mixerGroup = instance._soundGroup;
+                break;
+            case OutputChannel.Master:
+            default:
+                mixerGroup = instance._masterGroup;
+                break;
+        }
+
+        audioMixer.outputAudioMixerGroup = mixerGroup;
     }
 
     /// <summary>
@@ -399,19 +398,15 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// </summary>
     public static void Free(string guid)
     {
-        if (string.IsNullOrEmpty(guid))
+        if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
         {
-            Debug.LogError("The given guid string is null or empty!");
+            Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
             return;
         }
 
-        if (instance.m_managedHandles.ContainsKey(guid))
-        {
-            Handle handle = instance.m_managedHandles[guid];
-            handle.Free();
-
-            instance.m_managedHandles.Remove(guid);
-        }
+        Handle handle = instance.m_managedHandles[guid];
+        handle.Free();
+        instance.m_managedHandles.Remove(guid);
     }
 
     /// <summary>
@@ -577,6 +572,16 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     #endregion
 
     #region 内部类型
+    /// <summary>
+    /// 音频播放的输出频道
+    /// </summary>
+    public enum OutputChannel
+    {
+        Master,
+        Music,
+        Sound
+    }
+
     /// <summary>
     /// 音频播放句柄
     /// </summary>
@@ -953,6 +958,57 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
                 return m_audioSource.isPlaying;
             }
         }
+
+        public float Length
+        {
+            get
+            {
+                if (_disposed)
+                {
+                    Debug.LogError("Attempt to access a disposed handle!");
+                    return float.NaN;
+                }
+
+                float lenght = 0.0f;
+                foreach (var clip in m_sequence.Clips)
+                {
+                    if (clip.Loops < 0)
+                    {
+                        return float.PositiveInfinity;
+                    }
+
+                    lenght += clip.AudioClip.length * (clip.Loops + 1);
+                }
+
+                return lenght;
+            }
+        }
+
+        /*
+        public float Time 
+        {
+            get 
+            {
+                if (_disposed)
+                {
+                    Debug.LogError("Attempt to access a disposed handle!");
+                    return float.NaN;
+                }
+
+
+            }
+            set 
+            {
+                if (_disposed)
+                {
+                    Debug.LogError("Attempt to access a disposed handle!");
+                    return;
+                }
+
+
+            }
+        }
+        */
         #endregion
 
         #region Public 方法
@@ -1104,7 +1160,10 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 Destroy(m_audioSource.gameObject);
             }
+
+            m_sequence = null;
             m_audioSource = null;
+            m_onFinished = null;
 
             if (instance.m_pooledHandles.Count < HandlePoolSize)
             {
@@ -1152,7 +1211,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return false;
                 }
                 return instance.m_managedHandles[guid].ByPassEffects;
@@ -1161,7 +1220,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].ByPassEffects = value;
@@ -1177,7 +1236,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return false;
                 }
                 return instance.m_managedHandles[guid].BypassListenerEffects;
@@ -1186,7 +1245,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].BypassListenerEffects = value;
@@ -1202,7 +1261,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return false;
                 }
                 return instance.m_managedHandles[guid].BypassReverbZones;
@@ -1211,7 +1270,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].BypassReverbZones = value;
@@ -1227,7 +1286,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].Volume;
@@ -1236,7 +1295,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].Volume = value;
@@ -1252,7 +1311,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].Pitch;
@@ -1261,7 +1320,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].Pitch = value;
@@ -1277,7 +1336,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].PanStero;
@@ -1286,7 +1345,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].PanStero = value;
@@ -1302,7 +1361,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].SpatialBlend;
@@ -1311,7 +1370,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].SpatialBlend = value;
@@ -1327,7 +1386,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].ReverbZoneMix;
@@ -1336,7 +1395,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].ReverbZoneMix = value;
@@ -1352,7 +1411,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].DopplerLevel;
@@ -1361,7 +1420,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].DopplerLevel = value;
@@ -1377,7 +1436,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].Spread;
@@ -1386,7 +1445,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].Spread = value;
@@ -1402,7 +1461,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return AudioRolloffMode.Custom;
                 }
                 return instance.m_managedHandles[guid].RolloffMode;
@@ -1411,7 +1470,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].RolloffMode = value;
@@ -1427,7 +1486,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].MinDistance;
@@ -1436,7 +1495,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].MinDistance = value;
@@ -1452,7 +1511,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return float.NaN;
                 }
                 return instance.m_managedHandles[guid].MaxDistance;
@@ -1461,7 +1520,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].MaxDistance = value;
@@ -1477,7 +1536,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return Vector3.zero;
                 }
                 return instance.m_managedHandles[guid].Position;
@@ -1486,7 +1545,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return;
                 }
                 instance.m_managedHandles[guid].Position = value;
@@ -1502,13 +1561,56 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             {
                 if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
                 {
-                    Debug.LogError("The given guid is invalid!");
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
                     return false;
                 }
                 return instance.m_managedHandles[guid].IsPlaying;
             }
         }
     }
+
+    public class LengthIndexer
+    {
+        public float this[string guid]
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
+                {
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
+                    return float.NaN;
+                }
+                return instance.m_managedHandles[guid].Length;
+            }
+        }
+    }
+
+    /*TODO 实现控制播放的时间进度，难点在于无限循环的序列的播放时间的解析和计算*/
+    /*
+    public class TimeIndexer 
+    {
+        public float this[string guid]
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
+                {
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
+                    return float.NaN;
+                }
+                return instance.m_managedHandles[guid].Time;
+            }
+            set 
+            {
+                if (string.IsNullOrEmpty(guid) || !instance.m_managedHandles.ContainsKey(guid))
+                {
+                    Debug.LogWarning($"The given guid \"{guid}\" is invalid!");
+                    return;
+                }
+                instance.m_managedHandles[guid].Time = value;
+            }
+        }
+    }*/
     #endregion
 
     #endregion
