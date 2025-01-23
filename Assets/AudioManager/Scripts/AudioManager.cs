@@ -199,6 +199,16 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
     /// <param name="callback">当播放完毕后的回调方法</param>
     public static void PlayOneShot(AudioSequence sequence, float volume = 1.0f, OutputChannel channel = OutputChannel.Master, UnityAction callback = null)
     {
+        foreach (var clip in sequence.Clips)
+        {
+            if (clip.Loops < 0)
+            {
+                //需要英语化
+                Debug.LogError($"不能一次性播放此序列\"{sequence.name}\"，因为它是无限循环的！");
+                return;
+            }
+        }
+
         AudioSource source;
         if (!instance.TryGetAudioSource(out source))
         {
@@ -591,6 +601,8 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
         private AudioSequence m_sequence;
         private UnityAction m_onFinished;
 
+        private bool _isInProcess = false;
+        private bool _isPaused = false;
         private bool _disposed = false;    // 标识当前播放句柄是否被释放的Flag，被释放的播放句柄将无法被访问
         private Coroutine _coroutine;
 
@@ -955,7 +967,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
                     Debug.LogError("Attempt to access a disposed handle!");
                     return false;
                 }
-                return m_audioSource.isPlaying;
+                return _isInProcess && !_isPaused;
             }
         }
 
@@ -1030,6 +1042,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
                 instance.StopCoroutine(_coroutine);
             }
             _coroutine = instance.StartCoroutine(Process());
+            _isPaused = false;
         }
 
         /// <summary>
@@ -1048,6 +1061,8 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
                 instance.StopCoroutine(_coroutine);
             }
             m_audioSource.Stop();
+            _isInProcess = false;
+            _isPaused = false;
         }
 
         /// <summary>
@@ -1062,6 +1077,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             }
 
             m_audioSource.Pause();
+            _isPaused = true;
         }
 
         /// <summary>
@@ -1076,6 +1092,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
             }
 
             m_audioSource.UnPause();
+            _isPaused = false;
         }
 
         /// <summary>
@@ -1161,6 +1178,8 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
                 Destroy(m_audioSource.gameObject);
             }
 
+            _isInProcess = false;
+            _isPaused = false;
             m_sequence = null;
             m_audioSource = null;
             m_onFinished = null;
@@ -1177,6 +1196,8 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
         #region 协程
         private IEnumerator Process()
         {
+            _isInProcess = true;
+
             for (int i = 0; i < m_sequence.Clips.Length; i++)
             {
                 m_audioSource.clip = m_sequence.Clips[i].AudioClip;
@@ -1185,7 +1206,7 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
                 do
                 {
                     m_audioSource.Play();
-                    while (m_audioSource.time < m_sequence.Clips[i].AudioClip.length)
+                    while (m_audioSource.isPlaying || _isPaused)
                     {
                         yield return null;
                     }
@@ -1197,7 +1218,9 @@ public class AudioManager : AutoInstantiateMonoSingleton<AudioManager>
                 }
                 while (looped <= m_sequence.Clips[i].Loops);
             }
+
             m_onFinished?.Invoke();
+            _isInProcess = false;
         }
         #endregion
     }

@@ -7,7 +7,7 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "New Audio Sequence", menuName = "Create AudioSequence")]
 public class AudioSequence : ScriptableObject
 {
-    [SerializeField, Tooltip("音频序列的片段")]
+    [SerializeField]
     private Clip[] m_clips;
 
     #region 属性
@@ -21,7 +21,7 @@ public class AudioSequence : ScriptableObject
     /// <summary>
     /// 在运行时创建一个AudioSequence实例
     /// </summary>
-    public static AudioSequence CreateAudioSequence(params Clip[] clips) 
+    public static AudioSequence CreateAudioSequence(params Clip[] clips)
     {
         var seq = CreateInstance<AudioSequence>();
         seq.m_clips = clips;
@@ -90,7 +90,7 @@ public class AudioSequence : ScriptableObject
         /// <summary>
         /// 循环次数（片段会在播放一次的基础上根据该值额外重复播放多次，如果此值为负，则永久循环播放）
         /// </summary>
-        public int Loops {  get => m_loops; }
+        public int Loops { get => m_loops; }
         #endregion
     }
     #endregion
