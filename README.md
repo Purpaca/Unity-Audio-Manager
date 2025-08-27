@@ -10,6 +10,9 @@
 </a>
 </div>
 
+### 注意
+此内容将作为[Toolkit](https://github.com/Purpaca/My-Unity-Toolkits)的一部分继续更新，故此仓库不再更新！
+
 ### 概述
 
 一个适用于Unity项目的音频管理器组件，尝试弥补 Unity 原生音频播放的一些不足：  
